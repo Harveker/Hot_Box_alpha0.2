@@ -28,6 +28,8 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f4xx_hal.h"
+#include "stm32f4xx_hal_adc.h"
+#include "stm32f4xx_hal_tim.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -59,6 +61,21 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define KIT_LED_Pin GPIO_PIN_13
 #define KIT_LED_GPIO_Port GPIOC
+#define TEMP_SENSOR_PIN GPIO_PIN_0
+#define TEMP_SENSOR_GPIO_Port GPIOA
+
+#define PELTIER_PWM_Pin GPIO_PIN_6
+#define PELTIER_PWM_GPIO_Port GPIOA
+#define FAN_PWM_Pin GPIO_PIN_7
+#define FAN_PWM_GPIO_Port GPIOA
+
+/* Peripherals init prototypes */
+void MX_ADC1_Init(void);
+void MX_TIM3_Init(void);
+
+/* Peripheral handles (declared in main.c) */
+extern ADC_HandleTypeDef hadc1;
+extern TIM_HandleTypeDef htim3;
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

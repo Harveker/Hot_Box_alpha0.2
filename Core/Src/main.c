@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <math.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -47,6 +48,11 @@
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+void MX_ADC1_Init(void);
+void MX_TIM3_Init(void);
+
+ADC_HandleTypeDef hadc1;
+TIM_HandleTypeDef htim3;
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -84,22 +90,75 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_ADC1_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  /* Start PWM outputs */
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+
+  /* Control parameters */
+  const float setpoint = 30.0f; /* degrees C */
+  const float Kp = 30.0f;
+  const float Ki = 0.5f;
+  const float Kd = 5.0f;
+  float integral = 0.0f;
+  float prev_error = 0.0f;
+
+  uint32_t pwmPeriod = htim3.Init.Period;
+
   while (1)
   {
-    for (i = 0; i < 13; i++)
+    /* Read temperature from ADC (PA0) */
+    HAL_ADC_Start(&hadc1);
+    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
     {
-      HAL_GPIO_WritePin(KIT_LED_GPIO_Port, KIT_LED_Pin, 0);
-      HAL_Delay(25);
-      HAL_GPIO_WritePin(KIT_LED_GPIO_Port, KIT_LED_Pin, 1);
-      HAL_Delay(50);
+      uint32_t adc = HAL_ADC_GetValue(&hadc1);
+
+      /* Convert ADC to temperature using NTC 10k (divider 10k) and Beta=3950 */
+      const float Vref = 3.3f;
+      const float Rpull = 10000.0f;
+      const float R0 = 10000.0f;
+      const float B = 3950.0f;
+      float v = (adc / 4095.0f) * Vref;
+      float Rntc = Rpull * (v / (Vref - v + 1e-6f));
+      float tempK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/B) * logf(Rntc / R0) );
+      float tempC = tempK - 273.15f;
+
+      /* PID
+         output range 0..100 (percent) */
+      float error = setpoint - tempC;
+      integral += error * 0.2f; /* dt ~200ms */
+      float derivative = (error - prev_error) / 0.2f;
+      float output = Kp*error + Ki*integral + Kd*derivative;
+      prev_error = error;
+
+      /* Clamp output 0..100 */
+      if (output > 100.0f) output = 100.0f;
+      if (output < 0.0f) output = 0.0f;
+
+      /* Set Peltier PWM */
+      uint32_t peltierDuty = (uint32_t)((output/100.0f) * pwmPeriod);
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, peltierDuty);
+
+      /* Fan policy: if peltier power > 0, fan runs at min 60% and scales with output */
+      uint32_t fanDuty = 0;
+      if (output > 0.0f)
+      {
+        float fanPct = (output < 60.0f) ? 60.0f : output;
+        fanDuty = (uint32_t)((fanPct/100.0f) * pwmPeriod);
+      }
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, fanDuty);
+
+      /* Toggle LED as heartbeat */
+      HAL_GPIO_TogglePin(KIT_LED_GPIO_Port, KIT_LED_Pin);
     }
-    HAL_Delay(800);
+    HAL_Delay(200);
 
     /* USER CODE END WHILE */
 
@@ -177,11 +236,87 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(KIT_LED_GPIO_Port, &GPIO_InitStruct);
 
+  /* Configure PA0 as analog input (temp sensor) */
+  GPIO_InitStruct.Pin = TEMP_SENSOR_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(TEMP_SENSOR_GPIO_Port, &GPIO_InitStruct);
+
+  /* Configure PA6/PA7 as TIM3 CH1/CH2 (AF) for PWM */
+  GPIO_InitStruct.Pin = PELTIER_PWM_Pin | FAN_PWM_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM3;
+  HAL_GPIO_Init(PELTIER_PWM_GPIO_Port, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
+
+void MX_ADC1_Init(void)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  __HAL_RCC_ADC1_CLK_ENABLE();
+
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV2;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sConfig.Channel = ADC_CHANNEL_0;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+void MX_TIM3_Init(void)
+{
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  __HAL_RCC_TIM3_CLK_ENABLE();
+
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 95; /* adjust for PWM freq */
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999; /* 0..999 -> 1000 steps */
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
