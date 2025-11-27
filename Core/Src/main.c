@@ -162,18 +162,18 @@ int main(void)
         uint32_t valorAdc = HAL_ADC_GetValue(&hadc1);
 
         /* Converte ADC para temperatura usando NTC 10k (divisor 10k) e Beta=3950 */
-        const float Vref = 3.3f;
-        const float Rpullup = 10000.0f;
-        const float R0 = 10000.0f;
-        const float Beta = 3950.0f;
-        float tensao = (valorAdc / 4095.0f) * Vref;
-        float Rntc = Rpullup * (tensao / (Vref - tensao + 1e-6f));
-        float temperaturaK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/Beta) * logf(Rntc / R0) );
-        float temperaturaC = temperaturaK - 273.15f;
+        const float Vref = 3.3f;   // Tensão de referência do ADC
+        const float Rpullup = 10000.0f; // Resistência de pull-up do divisor
+        const float R0 = 10000.0f; // Resistência nominal do NTC a 25°C
+        const float Beta = 3950.0f; // Coeficiente Beta do NTC para 10k
+        float tensao = (valorAdc / 4095.0f) * Vref; // Converte valor ADC para tensão
+        float Rntc = Rpullup * (tensao / (Vref - tensao + 1e-6f)); // Calcula resistência do NTC
+        float temperaturaK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/Beta) * logf(Rntc / R0) );  //
+        float temperaturaC = temperaturaK - 273.15f; // Converte Kelvin para Celsius
 
         /* Variáveis de controle */
-        uint32_t dutyCyclePeltier = 0;
-        uint32_t dutyCycleFan = 0;
+        uint32_t dutyCyclePeltier = 0; // Duty cycle para o Peltier
+        uint32_t dutyCycleFan = 0; // Duty cycle para o ventilador
 
         /* Calcula erro: ek = gSetpoint_oC - T (Item 11b) */
         float ek = gSetpoint_oC - temperaturaC;
