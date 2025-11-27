@@ -106,6 +106,9 @@ int main(void)
   /* USER CODE BEGIN 1 */
   uint32_t ultimoTempoControle = 0;
   char bufferSerial[128];
+  /* A primeira execução do controle ocorrerá após 1 segundo - 
+     ultimoTempoControle inicializado em 0 é intencional para que
+     o primeiro ciclo execute imediatamente após a inicialização */
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -222,9 +225,9 @@ int main(void)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, dutyCycleFan);
 
         /* Envia dados via serial para monitoramento (Item 10) */
-        sprintf(bufferSerial, "T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | PWM_Peltier=%lu%% | Kp=%.1f\r\n",
+        sprintf(bufferSerial, "T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | PWM_Peltier=%.0f%% | Kp=%.1f\r\n",
                 temperaturaC, gSetpoint_oC, ek,
-                (dutyCyclePeltier * 100) / periodoPwm, Kp);
+                (dutyCyclePeltier * 100.0f) / periodoPwm, Kp);
         EnviarMensagemSerial(bufferSerial);
 
         /* Alterna LED como indicador de funcionamento */
