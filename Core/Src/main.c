@@ -2,16 +2,16 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
+  * @brief          : Corpo principal do programa
   ******************************************************************************
   * @attention
   *
   * Copyright (c) 2022 STMicroelectronics.
-  * All rights reserved.
+  * Todos os direitos reservados.
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  * Este software é licenciado sob os termos encontrados no arquivo LICENSE
+  * no diretório raiz deste componente de software.
+  * Se nenhum arquivo LICENSE acompanha este software, ele é fornecido COMO ESTÁ.
   *
   ******************************************************************************
   */
@@ -22,7 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "usbd_cdc_if.h"
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,7 +48,14 @@ ADC_HandleTypeDef hadc1;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
+/* Variável global de setpoint de temperatura em graus Celsius (Item 5) */
+float gSetpoint_oC = 45.0f;
 
+/* Flag para indicar tecla pressionada via serial */
+volatile char gTeclaRecebida = 0;
+
+/* Constante do controlador proporcional (Item 11a) */
+float Kp = 1.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -54,23 +64,48 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
-
+void ProcessarTeclaSerial(void);
+void EnviarMensagemSerial(const char* mensagem);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* Função para enviar mensagem via serial USB CDC */
+void EnviarMensagemSerial(const char* mensagem)
+{
+  CDC_Transmit_FS((uint8_t*)mensagem, strlen(mensagem));
+}
+
+/* Função para processar tecla recebida via serial (Item 8) */
+void ProcessarTeclaSerial(void)
+{
+  if (gTeclaRecebida == '+')
+  {
+    /* Incrementa setpoint em 5°C (Item 8a) */
+    gSetpoint_oC += 5.0f;
+    gTeclaRecebida = 0;
+  }
+  else if (gTeclaRecebida == '-')
+  {
+    /* Decrementa setpoint em 5°C (Item 8b) */
+    gSetpoint_oC -= 5.0f;
+    gTeclaRecebida = 0;
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
+  * @brief  Ponto de entrada da aplicação.
   * @retval int
   */
 int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  uint32_t i;
+  uint32_t ultimoTempoControle = 0;
+  char bufferSerial[128];
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -100,67 +135,102 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  /* Start PWM outputs */
+  /* Inicia saídas PWM */
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-  /* Control parameters */
-  const float setpoint = 30.0f; /* degrees C */
-  const float Kp = 30.0f;
-  const float Ki = 0.5f;
-  const float Kd = 5.0f;
-  float integral = 0.0f;
-  float prev_error = 0.0f;
-
-  uint32_t pwmPeriod = htim3.Init.Period;
+  uint32_t periodoPwm = htim3.Init.Period;
 
   while (1)
   {
-    /* Read temperature from ADC (PA0) */
-    HAL_ADC_Start(&hadc1);
-    if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+    /* Processa tecla recebida via serial (Item 8) */
+    ProcessarTeclaSerial();
+
+    /* Controle a cada 1 segundo (Item 9 e 11) */
+    uint32_t tempoAtual = HAL_GetTick();
+    if (tempoAtual - ultimoTempoControle >= 1000)
     {
-      uint32_t adc = HAL_ADC_GetValue(&hadc1);
+      ultimoTempoControle = tempoAtual;
 
-      /* Convert ADC to temperature using NTC 10k (divider 10k) and Beta=3950 */
-      const float Vref = 3.3f;
-      const float Rpull = 10000.0f;
-      const float R0 = 10000.0f;
-      const float B = 3950.0f;
-      float v = (adc / 4095.0f) * Vref;
-      float Rntc = Rpull * (v / (Vref - v + 1e-6f));
-      float tempK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/B) * logf(Rntc / R0) );
-      float tempC = tempK - 273.15f;
-
-      /* PID
-         output range 0..100 (percent) */
-      float error = setpoint - tempC;
-      integral += error * 0.2f; /* dt ~200ms */
-      float derivative = (error - prev_error) / 0.2f;
-      float output = Kp*error + Ki*integral + Kd*derivative;
-      prev_error = error;
-
-      /* Clamp output 0..100 */
-      if (output > 100.0f) output = 100.0f;
-      if (output < 0.0f) output = 0.0f;
-
-      /* Set Peltier PWM */
-      uint32_t peltierDuty = (uint32_t)((output/100.0f) * pwmPeriod);
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, peltierDuty);
-
-      /* Fan policy: if peltier power > 0, fan runs at min 60% and scales with output */
-      uint32_t fanDuty = 0;
-      if (output > 0.0f)
+      /* Lê temperatura do ADC (PA0) - Item 4 */
+      HAL_ADC_Start(&hadc1);
+      if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
       {
-        float fanPct = (output < 60.0f) ? 60.0f : output;
-        fanDuty = (uint32_t)((fanPct/100.0f) * pwmPeriod);
-      }
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, fanDuty);
+        uint32_t valorAdc = HAL_ADC_GetValue(&hadc1);
 
-      /* Toggle LED as heartbeat */
-      HAL_GPIO_TogglePin(KIT_LED_GPIO_Port, KIT_LED_Pin);
+        /* Converte ADC para temperatura usando NTC 10k (divisor 10k) e Beta=3950 */
+        const float Vref = 3.3f;
+        const float Rpullup = 10000.0f;
+        const float R0 = 10000.0f;
+        const float Beta = 3950.0f;
+        float tensao = (valorAdc / 4095.0f) * Vref;
+        float Rntc = Rpullup * (tensao / (Vref - tensao + 1e-6f));
+        float temperaturaK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/Beta) * logf(Rntc / R0) );
+        float temperaturaC = temperaturaK - 273.15f;
+
+        /* Variáveis de controle */
+        uint32_t dutyCyclePeltier = 0;
+        uint32_t dutyCycleFan = 0;
+
+        /* Calcula erro: ek = gSetpoint_oC - T (Item 11b) */
+        float ek = gSetpoint_oC - temperaturaC;
+
+        /* Item 9a: Se temperatura > setpoint + 2°C, PWM potência = 0%, fan = 60% */
+        if (temperaturaC > gSetpoint_oC + 2.0f)
+        {
+          dutyCyclePeltier = 0;
+          dutyCycleFan = (uint32_t)((60.0f / 100.0f) * periodoPwm);
+        }
+        /* Item 9b: Se temperatura < setpoint - 2°C, PWM potência = 100%, fan = 100% */
+        else if (temperaturaC < gSetpoint_oC - 2.0f)
+        {
+          dutyCyclePeltier = periodoPwm;
+          dutyCycleFan = periodoPwm;
+        }
+        /* Controlador P - dentro da faixa de +/- 2°C (Item 11) */
+        else
+        {
+          /* Item 11c: Se erro positivo, duty cycle = Kp * ek */
+          if (ek > 0.0f)
+          {
+            float saida = Kp * ek;
+            
+            /* Item 11d: Se Kp * ek > 100, limita a 100% */
+            if (saida > 100.0f)
+            {
+              saida = 100.0f;
+            }
+            
+            dutyCyclePeltier = (uint32_t)((saida / 100.0f) * periodoPwm);
+            
+            /* Fan acompanha potência do peltier, mínimo 60% */
+            float fanPct = (saida < 60.0f) ? 60.0f : saida;
+            dutyCycleFan = (uint32_t)((fanPct / 100.0f) * periodoPwm);
+          }
+          /* Item 11e: Se erro negativo, duty cycle = 0% */
+          else
+          {
+            dutyCyclePeltier = 0;
+            dutyCycleFan = (uint32_t)((60.0f / 100.0f) * periodoPwm);
+          }
+        }
+
+        /* Aplica PWM ao Peltier (Canal 1) */
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, dutyCyclePeltier);
+
+        /* Aplica PWM ao Fan (Canal 2) */
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, dutyCycleFan);
+
+        /* Envia dados via serial para monitoramento (Item 10) */
+        sprintf(bufferSerial, "T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | PWM_Peltier=%lu%% | Kp=%.1f\r\n",
+                temperaturaC, gSetpoint_oC, ek,
+                (dutyCyclePeltier * 100) / periodoPwm, Kp);
+        EnviarMensagemSerial(bufferSerial);
+
+        /* Alterna LED como indicador de funcionamento */
+        HAL_GPIO_TogglePin(KIT_LED_GPIO_Port, KIT_LED_Pin);
+      }
     }
-    HAL_Delay(200);
 
     /* USER CODE END WHILE */
 
