@@ -97,7 +97,7 @@ void ProcessarTeclaSerial(void)
 /* USER CODE END 0 */
 
 /**
-  * @brief  Ponto de entrada da aplicação.
+  * @brief  The application entry point.
   * @retval int
   */
 int main(void)
