@@ -61,6 +61,8 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define KIT_LED_Pin GPIO_PIN_13
 #define KIT_LED_GPIO_Port GPIOC
+#define TEMP_PIN_Pin GPIO_PIN_0
+#define TEMP_PIN_GPIO_Port GPIOA
 #define PeltierPWM_Pin GPIO_PIN_6
 #define PeltierPWM_GPIO_Port GPIOA
 #define FanPWM_Pin GPIO_PIN_7
