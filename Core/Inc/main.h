@@ -61,12 +61,10 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define KIT_LED_Pin GPIO_PIN_13
 #define KIT_LED_GPIO_Port GPIOC
-#define TEMP_SENSOR_Pin GPIO_PIN_0
-#define TEMP_SENSOR_GPIO_Port GPIOA
-#define PELTIER_TIM_Pin GPIO_PIN_6
-#define PELTIER_TIM_GPIO_Port GPIOA
-#define FAN_TIM_Pin GPIO_PIN_7
-#define FAN_TIM_GPIO_Port GPIOA
+#define PeltierPWM_Pin GPIO_PIN_6
+#define PeltierPWM_GPIO_Port GPIOA
+#define FanPWM_Pin GPIO_PIN_7
+#define FanPWM_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
