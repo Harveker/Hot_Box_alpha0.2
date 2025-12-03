@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Corpo principal do programa
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2022 STMicroelectronics.
-  * Todos os direitos reservados.
-  *
-  * Este software é licenciado sob os termos encontrados no arquivo LICENSE
-  * no diretório raiz deste componente de software.
-  * Se nenhum arquivo LICENSE acompanha este software, ele é fornecido COMO ESTÁ.
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Corpo principal do programa
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2022 STMicroelectronics.
+ * Todos os direitos reservados.
+ *
+ * Este software é licenciado sob os termos encontrados no arquivo LICENSE
+ * no diretório raiz deste componente de software.
+ * Se nenhum arquivo LICENSE acompanha este software, ele é fornecido COMO ESTÁ.
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include "termistorSH_Beta.c"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,16 +66,16 @@ static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void ProcessarTeclaSerial(void);
-void EnviarMensagemSerial(const char* mensagem);
+void EnviarMensagemSerial(const char *mensagem);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
 /* Função para enviar mensagem via serial USB CDC */
-void EnviarMensagemSerial(const char* mensagem)
+void EnviarMensagemSerial(const char *mensagem)
 {
-  CDC_Transmit_FS((uint8_t*)mensagem, strlen(mensagem));
+  CDC_Transmit_FS((uint8_t *)mensagem, strlen(mensagem));
 }
 
 /* Função para processar tecla recebida via serial (Item 8) */
@@ -97,16 +98,16 @@ void ProcessarTeclaSerial(void)
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
+ * @brief  The application entry point.
+ * @retval int
+ */
 int main(void)
 {
 
   /* USER CODE BEGIN 1 */
   uint32_t ultimoTempoControle = 0;
   char bufferSerial[128];
-  /* A primeira execução do controle ocorrerá após 1 segundo - 
+  /* A primeira execução do controle ocorrerá após 1 segundo -
      ultimoTempoControle inicializado em 0 é intencional para que
      o primeiro ciclo execute imediatamente após a inicialização */
   /* USER CODE END 1 */
@@ -161,19 +162,23 @@ int main(void)
       {
         uint32_t valorAdc = HAL_ADC_GetValue(&hadc1);
 
-        /* Converte ADC para temperatura usando NTC 10k (divisor 10k) e Beta=3950 */
-        const float Vref = 3.3f;   // Tensão de referência do ADC
-        const float Rpullup = 10000.0f; // Resistência de pull-up do divisor
-        const float R0 = 10000.0f; // Resistência nominal do NTC a 25°C
-        const float Beta = 3950.0f; // Coeficiente Beta do NTC para 10k
-        float tensao = (valorAdc / 4095.0f) * Vref; // Converte valor ADC para tensão
-        float Rntc = Rpullup * (tensao / (Vref - tensao + 1e-6f)); // Calcula resistência do NTC
-        float temperaturaK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/Beta) * logf(Rntc / R0) );  //
-        float temperaturaC = temperaturaK - 273.15f; // Converte Kelvin para Celsius
+        // Converte ADC para temperatura usando NTC 1k (divisor 1k) e Beta=2742
+         const float Vref = 3.3f;   // Tensão de referência do ADC
+         const float Rpulldown = 1000.0f; // Resistência de pull-down do divisor (ohms)
+         const float R_0 = 1000.0f; // Resistência nominal do NTC a 25°C
+         const float Beta = 5000.0f; // Coeficiente Beta do NTC para 10k
+         //const float Beta = 2752.90f; // Coeficiente Beta do NTC para 10k
+         float tensao = (valorAdc / 4095.0f) * Vref; // Converte valor ADC para tensão
+         float Rntc = Rpulldown * ((Vref - tensao) / (tensao + 1e-9f)); // Calcula resistência do NTC (pull-down)
+         float temperaturaK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/Beta) * logf(Rntc / R_0) ); // Calcula temperatura em Kelvin
+         float temperaturaC = temperaturaK - 273.15f; // Converte Kelvin para Celsius
+         //float temperaturaC = DividerVoltageToDegreesCelsius(Vref, tensao); // Converte Kelvin para Celsius
+         
 
+        
         /* Variáveis de controle */
         uint32_t dutyCyclePeltier = 0; // Duty cycle para o Peltier
-        uint32_t dutyCycleFan = 0; // Duty cycle para o ventilador
+        uint32_t dutyCycleFan = 0;     // Duty cycle para o ventilador
 
         /* Calcula erro: ek = gSetpoint_oC - T (Item 11b) */
         float ek = gSetpoint_oC - temperaturaC;
@@ -197,15 +202,15 @@ int main(void)
           if (ek > 0.0f)
           {
             float saida = Kp * ek;
-            
+
             /* Item 11d: Se Kp * ek > 100, limita a 100% */
             if (saida > 100.0f)
             {
               saida = 100.0f;
             }
-            
+
             dutyCyclePeltier = (uint32_t)((saida / 100.0f) * periodoPwm);
-            
+
             /* Fan acompanha potência do peltier, mínimo 60% */
             float fanPct = (saida < 60.0f) ? 60.0f : saida;
             dutyCycleFan = (uint32_t)((fanPct / 100.0f) * periodoPwm);
@@ -225,8 +230,8 @@ int main(void)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, dutyCycleFan);
 
         /* Envia dados via serial para monitoramento (Item 10) */
-        sprintf(bufferSerial, "T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | PWM_Peltier=%.0f%% | Kp=%.1f\r\n",
-                temperaturaC, gSetpoint_oC, ek,
+        sprintf(bufferSerial, "ADC=%lu V=%.2f V | Rntc=%.1f Ohm | T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | PWM_Peltier=%.0f%% | Kp=%.1f\r\n",
+                valorAdc, tensao, Rntc, temperaturaC, gSetpoint_oC, ek,
                 (dutyCyclePeltier * 100.0f) / periodoPwm, Kp);
         EnviarMensagemSerial(bufferSerial);
 
@@ -243,22 +248,22 @@ int main(void)
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+ * @brief System Clock Configuration
+ * @retval None
+ */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure the main internal regulator output voltage
-  */
+   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
+   * in the RCC_OscInitTypeDef structure.
+   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -273,9 +278,8 @@ void SystemClock_Config(void)
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
@@ -288,10 +292,10 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief ADC1 Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief ADC1 Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_ADC1_Init(void)
 {
 
@@ -306,7 +310,7 @@ static void MX_ADC1_Init(void)
   /* USER CODE END ADC1_Init 1 */
 
   /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
+   */
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
@@ -325,10 +329,10 @@ static void MX_ADC1_Init(void)
   }
 
   /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
-  */
+   */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -336,14 +340,13 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
-
 }
 
 /**
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_TIM3_Init(void)
 {
 
@@ -389,14 +392,13 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
-
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -429,9 +431,9 @@ static void MX_GPIO_Init(void)
 /* USER CODE END 4 */
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -444,12 +446,12 @@ void Error_Handler(void)
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
