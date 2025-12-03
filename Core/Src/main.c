@@ -36,6 +36,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define TEMP_MAX_PELTIER 70.0f // Temperatura máxima do Peltier em graus Celsius
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -51,7 +52,16 @@ TIM_HandleTypeDef htim3;
 /* USER CODE BEGIN PV */
 /* Variável global de setpoint de temperatura em graus Celsius (Item 5) */
 float gSetpoint_oC = 45.0f;
-
+const float Vref = 3.3f;         // Tensão de referência do ADC
+const float Rpulldown = 1000.0f; // Resistência de pull-down do divisor (ohms)
+float tensaoHotBox = 0.0f;
+float tensaoPeltier = 0.0f;
+uint32_t valorAdcHotBox = 0;
+uint32_t valorAdcPeltier = 0;
+float temperaturaPeltier = 0.0f;
+float temperaturaHotBox = 0.0f;
+float RntcHotBox = 0.0f;
+float RntcPeltier = 0.0f;
 /* Flag para indicar tecla pressionada via serial */
 volatile char gTeclaRecebida = 0;
 
@@ -65,6 +75,9 @@ static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
+uint16_t ADC_C_Rank0(void);
+uint16_t ADC_C_Rank2(void);
+float ConverterADCParaTemperatura(float tensao, float Rntc);
 void ProcessarTeclaSerial(void);
 void EnviarMensagemSerial(const char *mensagem);
 /* USER CODE END PFP */
@@ -72,6 +85,15 @@ void EnviarMensagemSerial(const char *mensagem);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+float ConverterADCParaTemperatura(float tensao, float Rntc)
+{
+  const float R_0 = 1000.0f;  // Resistência nominal do NTC a 25°C
+  const float Beta = 5000.0f; // Coeficiente Beta do NTC para 10k
+  // const float Beta = 2752.90f; // Coeficiente Beta do NTC para 10k
+  float temperaturaK = 1.0f / ((1.0f / (25.0f + 273.15f)) + (1.0f / Beta) * logf(Rntc / R_0)); // Calcula temperatura em Kelvin
+  float temperaturaC = temperaturaK - 273.15f;                                                 // Converte Kelvin para Celsius
+  return temperaturaC;
+}
 /* Função para enviar mensagem via serial USB CDC */
 void EnviarMensagemSerial(const char *mensagem)
 {
@@ -106,7 +128,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
   uint32_t ultimoTempoControle = 0;
-  char bufferSerial[128];
+  char bufferSerial[256];
   /* A primeira execução do controle ocorrerá após 1 segundo -
      ultimoTempoControle inicializado em 0 é intencional para que
      o primeiro ciclo execute imediatamente após a inicialização */
@@ -143,7 +165,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 
-  uint32_t periodoPwm = htim3.Init.Period;
+  uint32_t periodoPwm = htim3.Init.Period; // Período do PWM (60.0% do timer para melhor resolução)
 
   while (1)
   {
@@ -158,92 +180,101 @@ int main(void)
 
       /* Lê temperatura do ADC (PA0) - Item 4 */
       HAL_ADC_Start(&hadc1);
-      if (HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+      HAL_ADC_PollForConversion(&hadc1, 10);
+
+      valorAdcHotBox = HAL_ADC_GetValue(&hadc1);
+      tensaoHotBox = (valorAdcHotBox / 4095.0f) * Vref;                          // Converte valor ADC para tensão
+      RntcHotBox = Rpulldown * ((Vref - tensaoHotBox) / (tensaoHotBox + 1e-9f)); // Calcula resistência do NTC (pull-down)
+      temperaturaHotBox = ConverterADCParaTemperatura(tensaoHotBox, RntcHotBox);
+      /* Lê temperatura do ADC (PA2) - Item 4 */
+      HAL_ADC_Start(&hadc1);
+      HAL_ADC_PollForConversion(&hadc1, 10);
+
+      valorAdcPeltier = HAL_ADC_GetValue(&hadc1);
+      tensaoPeltier = (valorAdcPeltier / 4095.0f) * Vref;                           // Converte valor ADC para tensão
+      RntcPeltier = Rpulldown * ((Vref - tensaoPeltier) / (tensaoPeltier + 1e-9f)); // Calcula resistência do NTC (pull-down)
+      temperaturaPeltier = ConverterADCParaTemperatura(tensaoPeltier, RntcPeltier);
+
+      // float temperaturaC = DividerVoltageToDegreesCelsius(Vref, tensao); // Converte Kelvin para Celsius
+
+      /* Variáveis de controle */
+      uint32_t dutyCyclePeltier = 0; // Duty cycle para o Peltier
+      uint32_t dutyCycleFan = 0;     // Duty cycle para o ventilador
+
+      /* Calcula erro: ek = gSetpoint_oC - T (Item 11b) */
+      float ek = gSetpoint_oC - temperaturaHotBox;
+
+      if (temperaturaPeltier >= TEMP_MAX_PELTIER)
       {
-        uint32_t valorAdc = HAL_ADC_GetValue(&hadc1);
-
-        // Converte ADC para temperatura usando NTC 1k (divisor 1k) e Beta=2742
-         const float Vref = 3.3f;   // Tensão de referência do ADC
-         const float Rpulldown = 1000.0f; // Resistência de pull-down do divisor (ohms)
-         const float R_0 = 1000.0f; // Resistência nominal do NTC a 25°C
-         const float Beta = 5000.0f; // Coeficiente Beta do NTC para 10k
-         //const float Beta = 2752.90f; // Coeficiente Beta do NTC para 10k
-         float tensao = (valorAdc / 4095.0f) * Vref; // Converte valor ADC para tensão
-         float Rntc = Rpulldown * ((Vref - tensao) / (tensao + 1e-9f)); // Calcula resistência do NTC (pull-down)
-         float temperaturaK = 1.0f / ( (1.0f/(25.0f+273.15f)) + (1.0f/Beta) * logf(Rntc / R_0) ); // Calcula temperatura em Kelvin
-         float temperaturaC = temperaturaK - 273.15f; // Converte Kelvin para Celsius
-         //float temperaturaC = DividerVoltageToDegreesCelsius(Vref, tensao); // Converte Kelvin para Celsius
-         
-
+        /* Temperatura do Peltier excedeu o máximo permitido */
+        dutyCyclePeltier = periodoPwm*0.2; // Mantém uma leve potência para evitar overshoot
+        dutyCycleFan = periodoPwm; // Fan em 100% para resfriar o Peltier
+      } else{
         
-        /* Variáveis de controle */
-        uint32_t dutyCyclePeltier = 0; // Duty cycle para o Peltier
-        uint32_t dutyCycleFan = 0;     // Duty cycle para o ventilador
+      }
+      /* Item 9a: Se temperat2ura > setpoint + 2°C, PWM potência = 0%, fan = 60% */
+      if (temperaturaHotBox > gSetpoint_oC + 2.0f)
+      {
+        dutyCyclePeltier = periodoPwm*0.2; // Peltier em 0%
+        dutyCycleFan = (uint32_t)((60.0f / 100.0f) * periodoPwm); // Fan em 60%
+      }
+      /* Item 9b: Se temperatura < setpoint - 2°C, PWM potência = 100%, fan = 100% */
+      else if (temperaturaHotBox < gSetpoint_oC - 2.0f)
+      {
+        dutyCyclePeltier = periodoPwm*0.9; // Peltier em 100%
+        dutyCycleFan = periodoPwm;
+      }
 
-        /* Calcula erro: ek = gSetpoint_oC - T (Item 11b) */
-        float ek = gSetpoint_oC - temperaturaC;
+      /* Controlador P - dentro da faixa de +/- 2°C (Item 11) */
+      else
+      {
+        /* Item 11c: Se erro positivo, duty cycle = Kp * ek */
+        if (ek > 0.0f)
+        {
+          float saida = Kp * ek;
 
-        /* Item 9a: Se temperatura > setpoint + 2°C, PWM potência = 0%, fan = 60% */
-        if (temperaturaC > gSetpoint_oC + 2.0f)
+          /* Item 11d: Se Kp * ek > 100, limita a 100% */
+          if (saida > 100.0f)
+          {
+            saida = 100.0f;
+          }
+
+          dutyCyclePeltier = (uint32_t)((saida*3) / 5.0f) * periodoPwm;
+
+          /* Fan acompanha potência do peltier, mínimo 60% */
+          float fanPct = (saida < 60.0f) ? 60.0f : saida;
+          dutyCycleFan = (uint32_t)((fanPct / 100.0f) * periodoPwm);
+        }
+        /* Item 11e: Se erro negativo, duty cycle = 0% */
+        else
         {
           dutyCyclePeltier = 0;
           dutyCycleFan = (uint32_t)((60.0f / 100.0f) * periodoPwm);
         }
-        /* Item 9b: Se temperatura < setpoint - 2°C, PWM potência = 100%, fan = 100% */
-        else if (temperaturaC < gSetpoint_oC - 2.0f)
-        {
-          dutyCyclePeltier = periodoPwm;
-          dutyCycleFan = periodoPwm;
-        }
-        /* Controlador P - dentro da faixa de +/- 2°C (Item 11) */
-        else
-        {
-          /* Item 11c: Se erro positivo, duty cycle = Kp * ek */
-          if (ek > 0.0f)
-          {
-            float saida = Kp * ek;
-
-            /* Item 11d: Se Kp * ek > 100, limita a 100% */
-            if (saida > 100.0f)
-            {
-              saida = 100.0f;
-            }
-
-            dutyCyclePeltier = (uint32_t)((saida / 100.0f) * periodoPwm);
-
-            /* Fan acompanha potência do peltier, mínimo 60% */
-            float fanPct = (saida < 60.0f) ? 60.0f : saida;
-            dutyCycleFan = (uint32_t)((fanPct / 100.0f) * periodoPwm);
-          }
-          /* Item 11e: Se erro negativo, duty cycle = 0% */
-          else
-          {
-            dutyCyclePeltier = 0;
-            dutyCycleFan = (uint32_t)((60.0f / 100.0f) * periodoPwm);
-          }
-        }
-
-        /* Aplica PWM ao Peltier (Canal 1) */
-        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, dutyCyclePeltier);
-
-        /* Aplica PWM ao Fan (Canal 2) */
-        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, dutyCycleFan);
-
-        /* Envia dados via serial para monitoramento (Item 10) */
-        sprintf(bufferSerial, "ADC=%lu V=%.2f V | Rntc=%.1f Ohm | T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | PWM_Peltier=%.0f%% | Kp=%.1f\r\n",
-                valorAdc, tensao, Rntc, temperaturaC, gSetpoint_oC, ek,
-                (dutyCyclePeltier * 100.0f) / periodoPwm, Kp);
-        EnviarMensagemSerial(bufferSerial);
-
-        /* Alterna LED como indicador de funcionamento */
-        HAL_GPIO_TogglePin(KIT_LED_GPIO_Port, KIT_LED_Pin);
       }
+
+      /* Aplica PWM ao Peltier (Canal 1) */
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, dutyCyclePeltier);
+
+      /* Aplica PWM ao Fan (Canal 2) */
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_2, dutyCycleFan);
+
+      /* Envia dados via serial para monitoramento (Item 10) */
+      snprintf(bufferSerial, sizeof(bufferSerial), "Peltier:\r\n ADC=%lu V=%.2f V | Rntc=%.1f Ohm | T=%.2f oC | Máximo=%.2f oC | PWM_Peltier=%.0f%% | PWM_Fan=%.0f%% |\r\n Hot Box: \r\n ADC=%lu V=%.2f V | Rntc=%.1f Ohm | T=%.2f oC | Setpoint=%.2f oC | Erro=%.2f | Kp=%.1f\r\n",
+               valorAdcPeltier, tensaoPeltier, RntcPeltier, temperaturaPeltier, TEMP_MAX_PELTIER,
+               (dutyCyclePeltier * 100.0f) / periodoPwm, (dutyCycleFan * 100.0f) / periodoPwm,
+               valorAdcHotBox, tensaoHotBox, RntcHotBox, temperaturaHotBox, gSetpoint_oC, ek, Kp);
+      EnviarMensagemSerial(bufferSerial);
+
+      /* Alterna LED como indicador de funcionamento */
+      HAL_GPIO_TogglePin(KIT_LED_GPIO_Port, KIT_LED_Pin);
     }
-
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
   }
+
+  /* USER CODE END WHILE */
+
+  /* USER CODE BEGIN 3 */
+
   /* USER CODE END 3 */
 }
 
@@ -314,13 +345,14 @@ static void MX_ADC1_Init(void)
   hadc1.Instance = ADC1;
   hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
   hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ScanConvMode = ENABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = ENABLE;
+  hadc1.Init.NbrOfDiscConversion = 1;
   hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.NbrOfConversion = 2;
   hadc1.Init.DMAContinuousRequests = DISABLE;
   hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -332,7 +364,16 @@ static void MX_ADC1_Init(void)
    */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = 1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+   */
+  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Rank = 2;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
